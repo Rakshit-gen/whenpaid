@@ -1,0 +1,42 @@
+# Release builds for whenpaid. Tag vX.Y.Z and push; the release workflow runs this.
+version: 2
+
+project_name: whenpaid
+
+before:
+  hooks:
+    - cargo test --locked --lib --test rules --test scenarios --test props
+
+builds:
+  - id: whenpaid
+    builder: rust
+    binary: whenpaid
+    tool: cargo
+    command: zigbuild
+    flags:
+      - --release
+      - --locked
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    # Same names the installer expects: whenpaid_<version>_<os>_<arch>.tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - docs/*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
