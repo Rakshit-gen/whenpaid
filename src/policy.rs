@@ -597,3 +597,51 @@ pub enum FeeBasis {
     /// Use the same numbers in the payout currency: 5 EUR below 1,000 EUR.
     Nominal,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rule_ids_are_unique_and_sources_exist() {
+        let mut ids: Vec<_> = RULES.iter().map(|r| r.id).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), RULES.len());
+        for r in RULES {
+            assert!(
+                SOURCES.iter().any(|s| s.key == r.source),
+                "{} cites unknown source {}",
+                r.id,
+                r.source
+            );
+            assert!(!r.tests.is_empty(), "{} has no test", r.id);
+        }
+    }
+
+    #[test]
+    fn every_test_named_in_the_matrix_exists() {
+        let code = [
+            include_str!("money.rs"),
+            include_str!("calendar.rs"),
+            include_str!("ledger.rs"),
+            include_str!("account.rs"),
+            include_str!("engine.rs"),
+            include_str!("webhook.rs"),
+            include_str!("../tests/rules.rs"),
+            include_str!("../tests/props.rs"),
+            include_str!("../tests/scenarios.rs"),
+            include_str!("../tests/db.rs"),
+        ]
+        .concat();
+        for r in RULES {
+            for t in r.tests {
+                assert!(
+                    code.contains(&format!("fn {t}(")),
+                    "{} names missing test {t}",
+                    r.id
+                );
+            }
+        }
+    }
+}
