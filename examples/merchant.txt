@@ -1,0 +1,152 @@
+whenpaid 0.1.0 report as of 2026-11-24 12:00 UTC
+Business bus_sample
+Rules public-docs/2026-11-24, docs as of: payouts 2026-11-19, balances 2026-10-22, breakup 2026-04-01, breakup-details 2026-10-16, ledger-api 2026-03-25, verification 2026-11-02, webhooks 2026-11-20, payout-webhooks 2026-10-28, mor-intro 2026-10-07
+Rounding: half to even, to the smallest unit of each currency. `whenpaid rules` shows where each rule id comes from.
+
+Live payments: yes
+Payouts enabled: yes
+
+Next payout
+
+  2026-12-04 combined: upcoming
+    Covers 2026-11-16 to 2026-11-30, created 00:00 UTC, counts entries before 2026-12-01 00:00 UTC
+    USD wallet
+      carried in                                            202.51 USD
+      disputes won, amount returned (1)                     199.00 USD
+        dsp_1003:won 199.00 USD
+      released from reserve (1)                              19.90 USD
+        rsv_1003:rel 19.90 USD
+      payable                                               421.41 USD
+    EUR wallet
+      carried in                                              0.00 EUR
+      payments (1)                                          249.00 EUR
+        pay_1007 249.00 EUR
+      tax collected and remitted (1)                        -43.22 EUR
+        pay_1007:tax -43.22 EUR
+      payment fees (1)                                      -12.15 EUR
+        pay_1007:fee -12.15 EUR
+      payable                                               193.63 EUR
+    Minimum: 630.34 USD against 100.00 USD, reached [PS-THRESHOLD]
+      193.63 EUR is 208.93 USD at 1.079 USD per EUR (rate dated 2026-11-15; exact 208.92677 USD, rounded up by 0.323 of a cent)
+    Expected payout in USD
+      193.63 EUR converts to about 208.93 USD (estimate at 1.079 USD per EUR; the transfer-day rate decides)
+      before fees                                           630.34 USD
+      conversion fee                                           unknown
+      payout fee                                             -5.00 USD
+        5.00 USD because the payout before fees is below 1,000.00 USD
+      sent                                                     unknown
+      Not known: charges deducted by your bank or intermediary banks (PS-BANK-CHARGES)
+      Not known: the conversion fee on non-primary wallets (rate not published, PS-CONVERSION)
+    Rules: BAL-TYPES, DC-FEE-COMPARE, PS-CONVERSION, PS-CYCLE, PS-FX-INDICATIVE, PS-INITIATION, PS-PAYOUT-FEE, PS-RESERVE, PS-THRESHOLD
+    Next: Runs 2026-12-04 for 2026-11-16 to 2026-11-30. 630.34 USD before fees so far; the exact amount depends on the unpublished conversion fee.
+
+Past runs
+
+  2026-11-18 combined: paid, then failed and credited back (pyt_7002)
+    Covers 2026-11-01 to 2026-11-15, created 00:00 UTC, counts entries before 2026-11-16 00:00 UTC
+    USD wallet
+      carried in                                              0.00 USD
+      payments (1)                                          499.00 USD
+        pay_1005 499.00 USD
+      disputed amounts held (1)                            -199.00 USD
+        dsp_1003 -199.00 USD
+      tax collected and remitted (1)                        -39.92 USD
+        pay_1005:tax -39.92 USD
+      payment fees (1)                                      -27.57 USD
+        pay_1005:fee -27.57 USD
+      dispute fees (not returned if won) (1)                -30.00 USD
+        dsp_1003:fee -30.00 USD
+      payable                                               202.51 USD
+    Minimum: 202.51 USD against 100.00 USD, reached [PS-THRESHOLD]
+    Expected payout in USD
+      before fees                                           202.51 USD
+      payout fee                                             -5.00 USD
+        5.00 USD because the payout before fees is below 1,000.00 USD
+      sent                                                  197.51 USD
+      Not known: charges deducted by your bank or intermediary banks (PS-BANK-CHARGES)
+    Actual: pyt_7002 sent 197.51 USD, fee 5.00 USD
+    Due since 2026-11-18, 6 days ago [PS-MISSED-DATE]
+    Rules: BAL-TYPES, DC-FEE-COMPARE, PS-CYCLE, PS-FAILED, PS-INITIATION, PS-MISSED-DATE, PS-PAYOUT-FEE, PS-THRESHOLD
+    Next: The payout failed and the amount and fee were credited back to the wallet. Check the bank details on file; the money goes out with the next eligible run.
+
+  2026-11-04 combined: paid (pyt_7001)
+    Covers 2026-10-16 to 2026-10-31, created 00:00 UTC, counts entries before 2026-11-01 00:00 UTC
+    USD wallet
+      carried in                                             46.64 USD
+      payments (1)                                          199.00 USD
+        pay_1003 199.00 USD
+      refunds (1)                                           -49.00 USD
+        ref_1001 -49.00 USD
+      tax collected and remitted (1)                        -15.92 USD
+        pay_1003:tax -15.92 USD
+      payment fees (1)                                      -11.01 USD
+        pay_1003:fee -11.01 USD
+      refund fees (1)                                        -1.00 USD
+        ref_1001:fee -1.00 USD
+      held in reserve (1)                                   -19.90 USD
+        rsv_1003 -19.90 USD
+      payable                                               148.81 USD
+      paid out (amount plus fees)                          -148.81 USD
+      carries forward                                         0.00 USD
+    EUR wallet
+      carried in                                             22.41 EUR
+      payments (1)                                          120.00 EUR
+        pay_1004 120.00 EUR
+      tax collected and remitted (1)                        -20.00 EUR
+        pay_1004:tax -20.00 EUR
+      payment fees (1)                                       -5.93 EUR
+        pay_1004:fee -5.93 EUR
+      payable                                               116.48 EUR
+      paid out (amount plus fees)                          -116.48 EUR
+      carries forward                                         0.00 EUR
+    Minimum: 274.98 USD against 100.00 USD, reached [PS-THRESHOLD]
+      116.48 EUR is 126.17 USD at 1.0832 USD per EUR (rate dated 2026-10-01; exact 126.171136 USD, rounded down by 0.114 of a cent)
+    Expected payout in USD
+      116.48 EUR converts to about 126.17 USD (estimate at 1.0832 USD per EUR; the transfer-day rate decides)
+      before fees                                           274.98 USD
+      conversion fee                                           unknown
+      payout fee                                             -5.00 USD
+        5.00 USD because the payout before fees is below 1,000.00 USD
+      sent                                                     unknown
+      Not known: charges deducted by your bank or intermediary banks (PS-BANK-CHARGES)
+      Not known: the conversion fee on non-primary wallets (rate not published, PS-CONVERSION)
+    Actual: pyt_7001 sent 268.09 USD, fee 5.00 USD
+      Conversion cost implied by what was sent: 1.89 USD (before fees minus fees minus sent)
+    Rules: BAL-TYPES, DC-FEE-COMPARE, PB-UNATTRIBUTED, PS-CONVERSION, PS-CYCLE, PS-FX-INDICATIVE, PS-INITIATION, PS-PAYOUT-FEE, PS-RESERVE, PS-THRESHOLD
+    Next: None for this run.
+
+  2026-10-19 combined: not paid: below the minimum, carried forward (scheduled 2026-10-18, moved past a weekend or holiday)
+    Covers 2026-10-03 to 2026-10-15, created 00:00 UTC, counts entries before 2026-10-16 00:00 UTC
+    USD wallet
+      carried in                                              0.00 USD
+      payments (1)                                           49.00 USD
+        pay_1001 49.00 USD
+      payment fees (1)                                       -2.36 USD
+        pay_1001:fee -2.36 USD
+      payable                                                46.64 USD
+    EUR wallet
+      carried in                                              0.00 EUR
+      payments (1)                                           29.00 EUR
+        pay_1002 29.00 EUR
+      tax collected and remitted (1)                         -5.03 EUR
+        pay_1002:tax -5.03 EUR
+      payment fees (1)                                       -1.56 EUR
+        pay_1002:fee -1.56 EUR
+      payable                                                22.41 EUR
+    Minimum: 70.91 USD against 100.00 USD, not reached [PS-THRESHOLD]
+      22.41 EUR is 24.27 USD at 1.0832 USD per EUR (rate dated 2026-10-01; exact 24.274512 USD, rounded down by 0.451 of a cent)
+    Rules: BAL-TYPES, PS-CARRY, PS-CYCLE, PS-HOLIDAY, PS-INITIATION, PS-THRESHOLD
+    Next: Nothing to do. The balance carries forward until it reaches 100.00 USD (it is 70.91 USD).
+
+Payouts
+  pyt_7001 created 2026-11-04: 268.09 USD, received by your bank on 2026-11-06 (confirmed by you)
+    For: combined run 2026-11-04. Next: None.
+  pyt_7002 created 2026-11-18: 197.51 USD, failed; amount and fee credited back to the wallet (PS-FAILED)
+    For: combined run 2026-11-18. Next: Fix the bank details if the remarks point to them. The money is back in the wallet and goes out with the next eligible run.
+
+Wallet reconciliation
+  EUR: opened 0.00 EUR, moved 193.63 EUR, closed 193.63 EUR (matches the reported balance 193.63 EUR)
+  INR: opened 0.00 INR, moved 801.66 INR, closed 801.66 INR (matches the reported balance 801.66 INR)
+  USD: opened 0.00 USD, moved 421.41 USD, closed 421.41 USD (matches the reported balance 421.41 USD)
+  INR 801.66 INR across 3 entries is not part of any payout: the INR wallet is discontinued: not paid out and not counted toward the minimum [PS-INR]
+  Settled conversion cnv_7001: 116.48 EUR became 124.28 USD at 1.066964 (exact 239/224)
