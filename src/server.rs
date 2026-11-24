@@ -14,7 +14,33 @@ use axum::{Json, Router};
 use chrono::{DateTime, SubsecRound, Utc};
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+/// Set when SIGTERM or Ctrl-C arrives. The worker finishes its current job and exits.
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.ok();
+    };
+    #[cfg(unix)]
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = term => {}
+    }
+    STOPPING.store(true, Ordering::SeqCst);
+}
 
 /// Crash injection for tests: `WHENPAID_CRASH_AFTER=<point>` exits the process there.
 pub fn crash_point(name: &str) -> bool {
@@ -23,7 +49,7 @@ pub fn crash_point(name: &str) -> bool {
 
 pub fn router(pool: PgPool) -> Router {
     Router::new()
-        .route("/healthz", get(|| async { "ok" }))
+        .route("/healthz", get(health))
         .route("/webhooks/{business_id}", post(receive))
         .route("/v1/report", get(report))
         .route("/v1/payouts/{payout_id}/received", post(received))
@@ -31,7 +57,23 @@ pub fn router(pool: PgPool) -> Router {
 }
 
 fn err(code: StatusCode, msg: impl Into<String>) -> Response {
-    (code, Json(json!({ "error": msg.into() }))).into_response()
+    let msg = msg.into();
+    if code.is_server_error() {
+        eprintln!("whenpaid: {} {msg}", code.as_u16());
+    }
+    (code, Json(json!({ "error": msg }))).into_response()
+}
+
+/// Ready only if the database answers within two seconds.
+async fn health(State(pool): State<PgPool>) -> Response {
+    match tokio::time::timeout(Duration::from_secs(2), store::ping(&pool)).await {
+        Ok(Ok(())) => "ok".into_response(),
+        Ok(Err(e)) => err(StatusCode::SERVICE_UNAVAILABLE, e),
+        Err(_) => err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database did not answer in 2s",
+        ),
+    }
 }
 
 #[allow(clippy::result_large_err)] // the error is the HTTP response itself
@@ -150,6 +192,9 @@ async fn received(
         Ok(t) => t,
         Err(r) => return r,
     };
+    if b.at > Utc::now() + chrono::Duration::minutes(5) {
+        return err(StatusCode::BAD_REQUEST, "at is in the future");
+    }
     match store::confirm_received(&pool, tenant, &payout_id, b.at).await {
         Ok(true) => Json(json!({ "confirmed": true })).into_response(),
         Ok(false) => err(StatusCode::NOT_FOUND, "no such payout for this account"),
@@ -171,9 +216,7 @@ pub async fn serve(pool: PgPool) -> Result<(), String> {
         .map_err(|e| format!("can't listen on {addr}: {e}"))?;
     eprintln!("whenpaid listening on {addr}");
     axum::serve(listener, router(pool))
-        .with_graceful_shutdown(async {
-            tokio::signal::ctrl_c().await.ok();
-        })
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .map_err(|e| e.to_string())
 }
@@ -212,7 +255,22 @@ pub async fn work_once(pool: &PgPool) -> Result<bool, String> {
 pub async fn worker(pool: PgPool) -> Result<(), String> {
     store::migrate(&pool).await?;
     let once = std::env::var("WHENPAID_WORKER_ONCE").is_ok();
+    tokio::spawn(shutdown_signal());
+    let mut last_sweep: Option<std::time::Instant> = None;
     loop {
+        if STOPPING.load(Ordering::SeqCst) {
+            eprintln!("worker: stopping");
+            return Ok(());
+        }
+        // Once a minute, queue tenants whose report is from before today.
+        if !once && last_sweep.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
+            last_sweep = Some(std::time::Instant::now());
+            match store::queue_stale(&pool).await {
+                Ok(0) => {}
+                Ok(n) => eprintln!("worker: queued {n} stale report(s)"),
+                Err(e) => eprintln!("worker: {e}"),
+            }
+        }
         match work_once(&pool).await {
             Ok(true) => continue,
             Ok(false) if once => return Ok(()),

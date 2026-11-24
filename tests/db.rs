@@ -461,3 +461,162 @@ async fn reimport_is_idempotent_and_changed_rows_are_kept_aside() {
         "the original row is never overwritten"
     );
 }
+
+#[tokio::test]
+async fn reports_from_before_today_are_queued_again() {
+    let Some((pool, _)) = fresh().await else {
+        return;
+    };
+    let (t, _) = tenant(&pool, "bus_stale").await;
+    store::import(&pool, t, &sample_input("bus_stale"))
+        .await
+        .unwrap();
+    while server::work_once(&pool).await.unwrap() {}
+    assert_eq!(
+        store::queue_stale(&pool).await.unwrap(),
+        0,
+        "today's report is fresh"
+    );
+    sqlx::query("update reports set as_of = now() - interval '2 days' where tenant_id = $1")
+        .bind(t)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(store::queue_stale(&pool).await.unwrap(), 1);
+    assert!(server::work_once(&pool).await.unwrap());
+    assert_eq!(store::queue_stale(&pool).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn old_reports_are_pruned() {
+    let Some((pool, _)) = fresh().await else {
+        return;
+    };
+    let (t, _) = tenant(&pool, "bus_prune").await;
+    store::import(&pool, t, &sample_input("bus_prune"))
+        .await
+        .unwrap();
+    for i in 0..store::KEEP_REPORTS + 5 {
+        sqlx::query("insert into reports (tenant_id, input_sha256, as_of, body) values ($1, $2, now() - make_interval(days => $3::int), '{}')")
+            .bind(t)
+            .bind(format!("old{i}"))
+            .bind(i as i32 + 1)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    while server::work_once(&pool).await.unwrap() {}
+    assert_eq!(
+        count(
+            &pool,
+            "select count(*) from reports where tenant_id = $1",
+            t
+        )
+        .await,
+        store::KEEP_REPORTS
+    );
+    let newest: Value = store::latest_report(&pool, t).await.unwrap().unwrap();
+    assert_eq!(
+        newest["business_id"], "bus_prune",
+        "the newest report survives"
+    );
+}
+
+#[tokio::test]
+async fn bad_data_is_refused_before_it_is_stored() {
+    let Some((pool, _)) = fresh().await else {
+        return;
+    };
+    let (t, _) = tenant(&pool, "bus_bad").await;
+    let mut input = sample_input("bus_bad");
+    input.ledger[0].amount = -1;
+    let e = store::import(&pool, t, &input).await.unwrap_err();
+    assert!(e.contains("not imported"), "{e}");
+    assert_eq!(
+        count(
+            &pool,
+            "select count(*) from entries where tenant_id = $1",
+            t
+        )
+        .await,
+        0
+    );
+
+    let mut ev = payout_event("bus_bad", "success", "2026-11-19T10:00:00Z");
+    ev["data"]["amount"] = json!(-49_500);
+    let app = server::router(pool.clone());
+    let r = app
+        .oneshot(signed("bus_bad", "msg_neg", &ev, &secret("tenant a")))
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        StatusCode::OK,
+        "accepted so the sender stops retrying"
+    );
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap())
+            .unwrap();
+    assert_eq!(body["stored"], false);
+    assert_eq!(
+        count(
+            &pool,
+            "select count(*) from payouts where tenant_id = $1",
+            t
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(&pool, "select count(*) from inbox where tenant_id = $1", t).await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn health_checks_the_database_and_failed_recomputes_show_in_the_report() {
+    let Some((pool, _)) = fresh().await else {
+        return;
+    };
+    let (t, token) = tenant(&pool, "bus_health").await;
+    let app = server::router(pool.clone());
+    let r = app
+        .clone()
+        .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+
+    store::import(&pool, t, &sample_input("bus_health"))
+        .await
+        .unwrap();
+    while server::work_once(&pool).await.unwrap() {}
+    sqlx::query(
+        "insert into jobs (tenant_id, last_error) values ($1, 'stored account data: broken')",
+    )
+    .bind(t)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let r = app
+        .oneshot(
+            Request::get("/v1/report")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 24).await.unwrap())
+            .unwrap();
+    assert_eq!(body["recompute_error"], "stored account data: broken");
+    assert!(body["summary"].is_array());
+
+    pool.close().await;
+    let r = server::router(pool)
+        .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

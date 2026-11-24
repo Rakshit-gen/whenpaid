@@ -12,7 +12,15 @@ The cite-the-source idea comes from Sense AI: an answer should point at where it
 
 ## What a report looks like
 
-From `examples/merchant.json`, a made-up account. This is one run out of the full report in `examples/merchant.txt`:
+From `examples/merchant.json`, a made-up account. Every report opens with the short answer:
+
+```
+In short
+  Next payout: 2026-12-04, for 2026-11-16 to 2026-11-30. 630.34 USD before fees so far, minus a 5.00 USD payout fee and a conversion fee that isn't published, so the exact amount isn't known yet. [PS-PAYOUT-FEE, PS-CONVERSION]
+  Last payout: 2026-11-18, pyt_7002 for 197.51 USD failed and was credited back to the wallet. It goes out with the next eligible run. [PS-FAILED]
+```
+
+The same lines are in the JSON output and the API response as `summary`, so a support tool can show them as is. Below that, each run is broken down line by line. Here is the failed one from the full report in `examples/merchant.txt`:
 
 ```
   2026-11-18 combined: paid, then failed and credited back (pyt_7002)
@@ -103,20 +111,26 @@ Webhooks are checked with the Standard Webhooks scheme the docs describe: HMAC-S
 
 The worker leases one tenant's job at a time with `FOR UPDATE SKIP LOCKED`. Each new piece of data bumps the job's version. The worker clears the job only if the version hasn't moved while it worked, so a webhook that lands mid-run is never lost. A worker that dies mid-job leaves the job behind for the next one once the lease runs out. The tests kill the process at two points to prove it.
 
+Payout runs are created at 00:00 UTC, so a report can go out of date with no new data at all. Once a minute the worker queues every account whose newest report is from before today (UTC). It keeps the last 30 reports per account. If a recompute fails, `GET /v1/report` still returns the last good report, with the error in `recompute_error` so the caller knows it's behind.
+
+Bad data is refused before it's stored. An import is checked in full first (negative or absurd amounts, conflicting duplicate ids, invalid settings) and either goes in completely or not at all. A webhook with a negative amount gets a 200 so the sender stops retrying, but nothing is kept.
+
+`GET /healthz` returns 503 if Postgres doesn't answer within two seconds. On SIGTERM, `serve` stops taking new requests and finishes the ones in flight, and `worker` finishes its current job before it exits.
+
 whenpaid never moves money, so there's no outbox. It only reads what the provider reports.
 
 ## Tests
 
 ```sh
-cargo test                                                    # 73 tests
-DATABASE_URL=postgres://localhost/whenpaid_test cargo test    # also runs the 8 Postgres tests
+cargo test                                                    # 82 tests
+DATABASE_URL=postgres://localhost/whenpaid_test cargo test    # also runs the 12 Postgres tests
 ```
 
 - **Unit tests** cover every module.
 - **Fixtures I worked out by hand** include the provider's own MoR example (230.00 USD gross becomes 186.95 net), a mixed-wallet payout, both readings of the GBP fee rule, and a holiday move.
 - **Property tests** check that every cent is either paid out or still in the wallet, and that every run's lines add up exactly to its payable balance. They also check that a shuffled or duplicated export gives the same report, and that removing any single row shows up as a gap of exactly that row's amount.
 - **Eleven scenarios** are built from public "where is my payout" questions, with names and amounts replaced. The list is in `docs/SCENARIOS.md`.
-- **Postgres tests** cover 25 concurrent copies of the same webhook, reordered payout events, eight workers racing over ten tenants, new data arriving mid-job, crashes at two points, re-imports with a changed row, and tenant isolation.
+- **Postgres tests** cover 25 concurrent copies of the same webhook, reordered payout events, eight workers racing over ten tenants, new data arriving mid-job, crashes at two points, re-imports with a changed row, tenant isolation, stale reports being queued again, pruning, refusing bad data, and the health check.
 
 The rule catalog in `src/policy.rs` names the tests for each rule, and a test fails if any of those tests doesn't exist. CI also fails if `docs/SOURCES.md` falls out of sync with the code.
 

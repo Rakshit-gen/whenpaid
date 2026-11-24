@@ -94,3 +94,21 @@ Every number in the README says which machine it came from, which dataset, the e
 ## 17. Ship as one binary
 
 One binary does the CLI, the server and the worker. Releases are built with goreleaser for Linux and macOS on amd64 and arm64, and an install script puts the binary in `~/.local/bin` after checking its SHA-256. No Rust toolchain needed to try it.
+
+## 18. Put the answer first
+
+The first version of the report was correct but buried the answer. A merchant whose payout failed had to read about a hundred lines to find out, and then work out for themselves when the money would come. Now every report opens with two or three lines: when the next payout is, roughly how much, and what happened to the last one. Each line ends with its rule ids, like everything else. The detail is still below for anyone who wants to check the math.
+
+The summary only restates what the runs below it already say. It has no logic of its own beyond picking which run to describe, so it can't disagree with the breakdown.
+
+## 19. Refuse bad data at the door
+
+The first service version stored whatever arrived and let the engine complain later. That meant one webhook with a negative amount could make every recompute for that merchant fail, forever, while the API kept serving an old report as if nothing was wrong. Now the same checks the engine runs happen before anything is written. An import goes in completely or not at all. A webhook that can never be valid gets a 200, so the sender stops retrying, and nothing is kept. Absurd amounts are rejected with a clear error, where before they overflowed and crashed.
+
+## 20. Reports have to age
+
+A report computed on the 17th is wrong on the 18th even if no new data arrived, because a payout run was created at midnight. I had only recomputed on new data. Now the worker queues every account whose newest report is from before today in UTC. While fixing this I found a second bug: a recompute with exactly the same input as an existing report was silently dropped, so the stale report stayed. It now replaces the old row.
+
+## 21. Empty wallets don't need a rate
+
+An account that only ever sold in USD was marked "can't tell" on every run, because the empty EUR and GBP wallets had no exchange rate. One old payment produced 241 false alarms. A wallet with nothing in it adds nothing, so it no longer needs a rate (DC-EMPTY-WALLET).

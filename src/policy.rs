@@ -494,6 +494,22 @@ pub const RULES: &[Rule] = &[
         tests: &["failed_payout_without_reversal_is_flagged"],
     },
     Rule {
+        id: "DC-AS-OF",
+        basis: DesignChoice,
+        source: "none",
+        says: "A report is for one moment, as_of. Ledger rows dated after it are left out of every run and the reconciliation, and listed with their count and total so nothing disappears silently.",
+        code: "engine::run",
+        tests: &["rows_after_as_of_are_left_out"],
+    },
+    Rule {
+        id: "DC-EMPTY-WALLET",
+        basis: DesignChoice,
+        source: "none",
+        says: "A wallet with nothing payable adds zero to the threshold and the payout, so it needs no exchange rate. Only wallets with money in them can make a run undecided.",
+        code: "engine::run (threshold check), engine::expected_payout",
+        tests: &["empty_wallets_need_no_exchange_rate"],
+    },
+    Rule {
         id: "DC-UNKNOWN",
         basis: DesignChoice,
         source: "none",

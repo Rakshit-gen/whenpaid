@@ -100,6 +100,9 @@ pub struct Report {
     pub settled_conversions: Vec<SettledConversion>,
     pub findings: Vec<Finding>,
     pub discrepancies: Vec<Discrepancy>,
+    /// The short answer, first thing in the report: when, how much, and why the last run
+    /// was held or smaller. Each line ends with the rule ids it rests on.
+    pub summary: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -506,14 +509,61 @@ fn latest_status(r: &PayoutRecord) -> Option<&StatusEvent> {
         .max_by_key(|e| (e.timestamp, e.status as u8))
 }
 
+/// Everything that can be checked about an input without running it. The service calls
+/// this before storing anything, so bad data is refused at the door instead of
+/// failing every recompute later.
+pub fn check_input(input: &Input) -> Result<(), String> {
+    input.settings.validate(input.params.min_threshold)?;
+    check_payouts(&input.payouts)?;
+    Rates::new(&input.rates)?;
+    Ledger::build(&input.ledger).map(|_| ())
+}
+
+pub fn check_payouts(payouts: &[PayoutRecord]) -> Result<(), String> {
+    for r in payouts {
+        for (what, v) in [("amount", Some(r.amount)), ("fee", r.fee)] {
+            match v {
+                Some(v) if v < 0 => {
+                    return Err(format!("payout {}: {what} is negative", r.payout_id));
+                }
+                Some(v) if v as i128 > crate::ledger::MAX_TOTAL => {
+                    return Err(format!(
+                        "payout {}: {what} is too large to be real",
+                        r.payout_id
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn run(input: &Input) -> Result<Report, String> {
     let params = &input.params;
     let s = &input.settings;
     s.validate(params.min_threshold)?;
+    check_payouts(&input.payouts)?;
     let mode = params.rounding;
-    let ledger = Ledger::build(&input.ledger)?;
-    let rates = Rates::new(&input.rates)?;
     let as_of = input.as_of;
+    // A report is for one moment. Rows dated after it are left out and counted (DC-AS-OF).
+    let later: Vec<&LedgerEntry> = input
+        .ledger
+        .iter()
+        .filter(|e| e.created_at > as_of)
+        .collect();
+    let ledger = if later.is_empty() {
+        Ledger::build(&input.ledger)?
+    } else {
+        let rows: Vec<LedgerEntry> = input
+            .ledger
+            .iter()
+            .filter(|e| e.created_at <= as_of)
+            .cloned()
+            .collect();
+        Ledger::build(&rows)?
+    };
+    let rates = Rates::new(&input.rates)?;
     let mut discrepancies = Vec::new();
 
     let seen = collect_payouts(&ledger, &input.payouts);
@@ -665,9 +715,13 @@ pub fn run(input: &Input) -> Result<Report, String> {
                 let mut total = 0i64;
                 let mut convs = Vec::new();
                 for w in &wallets {
+                    // An empty wallet adds nothing, so it needs no rate.
+                    if w.payable.minor == 0 {
+                        continue;
+                    }
                     match rates.convert(w.payable, Currency::USD, slot.runs, mode)? {
                         Some(cv) => {
-                            total += cv.to.minor;
+                            total = add(total, cv.to.minor)?;
                             if w.currency != Currency::USD {
                                 convs.push(cv);
                             }
@@ -964,13 +1018,26 @@ pub fn run(input: &Input) -> Result<Report, String> {
     let payouts = payout_views(&seen, &runs, as_of, params, payout_data, &mut discrepancies);
 
     let reconciliation = reconcile(&ledger);
-    let excluded = excluded(&ledger);
+    let mut excluded = excluded(&ledger);
+    let mut after: BTreeMap<Currency, (usize, i64)> = BTreeMap::new();
+    for e in &later {
+        let x = after.entry(e.currency).or_default();
+        x.0 += 1;
+        x.1 += e.signed().minor;
+    }
+    excluded.extend(after.into_iter().map(|(c, (n, m))| Excluded {
+        currency: c,
+        entries: n,
+        balance: Money::new(m, c),
+        rule: "DC-AS-OF",
+        why: "dated after this report's as_of time, so not counted yet",
+    }));
     let settled_conversions = settled(&ledger);
     runs.sort_by(|a, b| (a.slot.runs, &a.group).cmp(&(b.slot.runs, &b.group)));
     discrepancies.sort_by_key(|d| format!("{d:?}"));
     discrepancies.dedup();
 
-    Ok(Report {
+    let mut report = Report {
         tool: format!("whenpaid {}", env!("CARGO_PKG_VERSION")),
         policy_version: policy::POLICY_VERSION,
         docs_as_of: policy::docs_as_of(),
@@ -985,7 +1052,187 @@ pub fn run(input: &Input) -> Result<Report, String> {
         settled_conversions,
         findings: ledger.findings.clone(),
         discrepancies,
-    })
+        summary: vec![],
+    };
+    report.summary = summarize(&report);
+    Ok(report)
+}
+
+fn add(a: i64, b: i64) -> Result<i64, String> {
+    a.checked_add(b)
+        .ok_or_else(|| "amounts too large to add without overflowing".to_string())
+}
+
+fn summarize(r: &Report) -> Vec<String> {
+    let mut out = Vec::new();
+    for b in &r.eligibility.blockers {
+        out.push(format!(
+            "Payouts are on hold: {}. Reason: {}. Until: {}. [{}]",
+            b.what, b.reason, b.until, b.rule
+        ));
+    }
+    let mut groups: Vec<&str> = r.runs.iter().map(|x| x.group.as_str()).collect();
+    groups.sort();
+    groups.dedup();
+    let label = |g: &str| {
+        if groups.len() > 1 {
+            format!(" ({g})")
+        } else {
+            String::new()
+        }
+    };
+
+    for &g in &groups {
+        let runs: Vec<&Run> = r.runs.iter().filter(|x| x.group == g).collect();
+        if let Some(next) = runs.iter().find(|x| x.status == RunStatus::Projected) {
+            let when = format!(
+                "Next payout{}: {}, for {} to {}.",
+                label(g),
+                next.slot.runs,
+                next.slot.period_start,
+                next.slot.period_end
+            );
+            let much = match (&next.threshold, &next.expected) {
+                _ if !next.blockers.is_empty() => {
+                    "It won't go out while the hold lasts.".to_string()
+                }
+                (Some(t), _) if !t.met => format!(
+                    "Nothing goes out unless the balance reaches the {} minimum before the period ends. It is {} so far. [PS-THRESHOLD]",
+                    t.threshold, t.total
+                ),
+                (_, Some(e)) => match e.sent {
+                    Some(sent) => format!(
+                        "About {sent} so far: {} before fees, minus {} in fees. [PS-PAYOUT-FEE]",
+                        e.gross,
+                        Money::new(e.gross.minor - sent.minor, sent.currency)
+                    ),
+                    None if e.payout_fee.minor == 0 => format!(
+                        "{} before fees so far. No payout fee at this size, but the conversion fee isn't published, so the exact amount isn't known yet. [PS-PAYOUT-FEE, PS-CONVERSION]",
+                        e.gross
+                    ),
+                    None => format!(
+                        "{} before fees so far, minus a {} payout fee and a conversion fee that isn't published, so the exact amount isn't known yet. [PS-PAYOUT-FEE, PS-CONVERSION]",
+                        e.gross, e.payout_fee
+                    ),
+                },
+                _ => "Nothing to pay so far.".to_string(),
+            };
+            out.push(format!("{when} {much}"));
+        }
+        if let Some(last) = runs.iter().rev().find(|x| x.status != RunStatus::Projected) {
+            out.push(last_run_line(last, &label(g)));
+        }
+    }
+
+    let problems = r.discrepancies.iter().filter(|d| d.is_error()).count()
+        + r.findings
+            .iter()
+            .filter(|f| !matches!(f, Finding::Duplicate { .. }))
+            .count();
+    if problems > 0 {
+        out.push(format!(
+            "{problems} {} in the data {} add up. See Needs a look below.",
+            if problems == 1 { "thing" } else { "things" },
+            if problems == 1 { "doesn't" } else { "don't" }
+        ));
+    }
+    out
+}
+
+fn last_run_line(run: &Run, label: &str) -> String {
+    let date = run.slot.runs;
+    let moved = if run.slot.runs != run.slot.scheduled {
+        format!(
+            " (moved from {} past a weekend or holiday [PS-HOLIDAY])",
+            run.slot.scheduled
+        )
+    } else {
+        String::new()
+    };
+    let overdue = match (run.due_since, run.overdue_days) {
+        (Some(d), Some(n)) => {
+            format!(" The money has been due since {d}, {n} days. [PS-MISSED-DATE]")
+        }
+        _ => String::new(),
+    };
+    match run.status {
+        RunStatus::Paid | RunStatus::PaidSimulated => {
+            // Deductions grouped by kind, biggest first. Each kind lists its amount per wallet.
+            let mut taken: Vec<(&str, i64, Vec<Money>)> = Vec::new();
+            for l in run
+                .wallets
+                .iter()
+                .flat_map(|w| w.lines.iter())
+                .filter(|l| l.amount.minor < 0)
+            {
+                let amount = Money::new(-l.amount.minor, l.amount.currency);
+                match taken.iter_mut().find(|t| t.0 == l.label) {
+                    Some(t) => {
+                        t.1 = t.1.max(amount.minor);
+                        t.2.push(amount);
+                    }
+                    None => taken.push((l.label, amount.minor, vec![amount])),
+                }
+            }
+            taken.sort_by_key(|t| -t.1);
+            let taken: Vec<String> = taken
+                .iter()
+                .take(3)
+                .map(|(label, _, amounts)| {
+                    let a: Vec<String> = amounts.iter().map(|m| m.to_string()).collect();
+                    format!("{label} {}", a.join(" + "))
+                })
+                .collect();
+            let what = match (&run.matched, run.status) {
+                (Some(m), _) => match m.sent {
+                    Some(sent) => format!("{} sent {sent}", m.payout_id),
+                    None => format!("{} went out", m.payout_id),
+                },
+                (None, _) => {
+                    "by the rules it paid out (no payout data was given to check it)".to_string()
+                }
+            };
+            let why = if taken.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " Biggest amounts taken out before it: {}. [BAL-TYPES]",
+                    taken.join(", ")
+                )
+            };
+            format!("Last payout{label}: {date}{moved}, {what}.{why}")
+        }
+        RunStatus::Reversed => {
+            let what = run
+                .matched
+                .as_ref()
+                .map_or(String::new(), |m| match m.sent {
+                    Some(sent) => format!(" {} for {sent}", m.payout_id),
+                    None => format!(" {}", m.payout_id),
+                });
+            format!(
+                "Last payout{label}: {date}{moved},{what} failed and was credited back to the wallet. It goes out with the next eligible run. [PS-FAILED]"
+            )
+        }
+        RunStatus::Missing => format!(
+            "Last run{label}: {date}{moved}. The rules say it should have paid and no payout was found.{overdue}"
+        ),
+        RunStatus::Blocked => {
+            format!("Last run{label}: {date}{moved}, blocked by the hold.{overdue}")
+        }
+        RunStatus::BelowThreshold => {
+            let t = run.threshold.as_ref().expect("threshold checked");
+            format!(
+                "Last run{label}: {date}{moved}, nothing went out. The balance was {}, below the {} minimum, and carries forward. [PS-THRESHOLD, PS-CARRY]",
+                t.total, t.threshold
+            )
+        }
+        RunStatus::NothingToPay => format!("Last run{label}: {date}{moved}, nothing to pay."),
+        RunStatus::Undecided => format!(
+            "Last run{label}: {date}{moved}, can't tell. An exchange rate it needs is missing from the input."
+        ),
+        RunStatus::Projected => unreachable!("filtered out"),
+    }
 }
 
 /// Can this payout belong to this group? Its currency must be the group's payout currency.
@@ -1019,13 +1266,13 @@ fn expected_payout(
     let mut conversions = Vec::new();
     for w in wallets {
         if w.currency == cur {
-            gross += w.payable.minor;
-        } else {
+            gross = add(gross, w.payable.minor)?;
+        } else if w.payable.minor != 0 {
             let Some(cv) = rates.convert(w.payable, cur, day, mode)? else {
                 return Ok(None);
             };
-            gross += cv.to.minor;
-            converted_gross += cv.to.minor;
+            gross = add(gross, cv.to.minor)?;
+            converted_gross = add(converted_gross, cv.to.minor)?;
             conversions.push(cv);
         }
     }
@@ -1143,7 +1390,8 @@ fn next_action(
     e: &Option<Expected>,
 ) -> String {
     match status {
-        RunStatus::Paid | RunStatus::PaidSimulated => "None for this run.".into(),
+        RunStatus::Paid => "Nothing to do.".into(),
+        RunStatus::PaidSimulated => "Nothing to do if this payout reached you. There was no payout data to check it against.".into(),
         RunStatus::Missing => "The rules say this run should have paid and no payout is in the data. Check the Payouts page for this date; if nothing is there, contact support with this run's date and amount.".into(),
         RunStatus::Reversed => "The payout failed and the amount and fee were credited back to the wallet. Check the bank details on file; the money goes out with the next eligible run.".into(),
         RunStatus::Blocked => blockers.first().map_or("Unknown.".into(), |b| b.action.clone()),
@@ -1193,7 +1441,7 @@ fn payout_views(
                 out.push(Discrepancy::RecordWithoutLedgerRows { payout_id: s.id.clone() });
             }
             let (state, action) = match (status, s.reversed, bank) {
-                (_, _, Some(b)) => (format!("received by your bank on {} (confirmed by you)", b.date_naive()), "None.".to_string()),
+                (_, _, Some(b)) => (format!("received by your bank on {} (confirmed by you)", b.date_naive()), "Nothing to do.".to_string()),
                 (Some(PayoutStatus::Failed), true, _) => ("failed; amount and fee credited back to the wallet (PS-FAILED)".into(), "Fix the bank details if the remarks point to them. The money is back in the wallet and goes out with the next eligible run.".into()),
                 (Some(PayoutStatus::Failed), false, _) => ("failed; no credit-back rows in the ledger yet (PS-FAILED)".into(), "Expect a payout reversal and a payout fees reversal in the ledger. If they don't appear, contact support with the payout id.".into()),
                 (_, true, _) => ("reversed in the ledger (PS-FAILED)".into(), "The money is back in the wallet.".into()),
@@ -1302,7 +1550,7 @@ fn excluded(l: &Ledger) -> Vec<Excluded> {
                 "BAL-WALLETS"
             },
             why: if c == Currency::INR {
-                "the INR wallet is discontinued: not paid out and not counted toward the minimum"
+                "the INR wallet is discontinued, so it is not paid out or counted toward the minimum"
             } else {
                 "not one of the USD, GBP or EUR payout wallets"
             },
@@ -1530,6 +1778,54 @@ mod tests {
         assert_eq!(x.status, RunStatus::Blocked);
         assert_eq!(x.wallets[0].payable.minor, 50_000);
         assert!(x.rules.contains(&"PS-RESERVE"));
+    }
+
+    #[test]
+    fn rows_after_as_of_are_left_out() {
+        let mut b = Builder::new();
+        b.sale("pay_1", "2026-11-02T10:00:00Z", Currency::USD, 50_000, 0, 0);
+        b.sale("pay_2", "2026-11-20T10:00:00Z", Currency::USD, 90_000, 0, 0);
+        let r = run(&input(&b, "2026-11-10T00:00:00Z")).unwrap();
+        let next = r
+            .runs
+            .iter()
+            .find(|x| x.status == RunStatus::Projected)
+            .unwrap();
+        assert_eq!(next.wallets[0].payable.minor, 50_000);
+        assert_eq!(r.reconciliation[0].closing.minor, 50_000);
+        assert_eq!(
+            (
+                r.excluded[0].rule,
+                r.excluded[0].entries,
+                r.excluded[0].balance.minor
+            ),
+            ("DC-AS-OF", 1, 90_000)
+        );
+    }
+
+    #[test]
+    fn empty_wallets_need_no_exchange_rate() {
+        let mut b = Builder::new();
+        b.sale("pay_1", "2026-11-02T10:00:00Z", Currency::USD, 50_000, 0, 0);
+        let mut i = input(&b, "2026-11-24T00:00:00Z");
+        i.rates.clear();
+        let r = run(&i).unwrap();
+        assert!(
+            r.discrepancies
+                .iter()
+                .all(|d| !matches!(d, Discrepancy::MissingRate { .. })),
+            "{:?}",
+            r.discrepancies
+        );
+        assert!(r.runs.iter().all(|x| x.status != RunStatus::Undecided));
+    }
+
+    #[test]
+    fn absurd_amounts_are_rejected_not_wrapped() {
+        let row = |id: &str| serde_json::json!({"id": id, "created_at": "2026-11-02T10:00:00Z", "currency": "USD", "event_type": "payment", "amount": i64::MAX, "is_credit": true});
+        let mut i = input(&Builder::new(), "2026-11-24T00:00:00Z");
+        i.ledger = serde_json::from_value(serde_json::json!([row("a"), row("b")])).unwrap();
+        assert!(run(&i).unwrap_err().contains("export looks broken"));
     }
 
     #[test]

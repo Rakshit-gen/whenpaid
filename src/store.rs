@@ -129,7 +129,7 @@ pub async fn ingest_webhook(
         return Ok(Ingested::Duplicate);
     }
     if event_type.starts_with("payout.") {
-        apply_payout_event(&mut tx, tenant, &body["data"], ts, webhook_id).await?;
+        apply_payout_event(&mut tx, tenant, &body["data"], ts).await?;
         mark_dirty(&mut tx, tenant).await?;
     }
     tx.commit().await.map_err(e)?;
@@ -143,7 +143,6 @@ async fn apply_payout_event(
     tenant: i64,
     d: &Value,
     ts: DateTime<Utc>,
-    webhook_id: &str,
 ) -> Result<()> {
     let status: PayoutStatus = serde_json::from_value(d["status"].clone())
         .map_err(|_| format!("unknown payout status {}", d["status"]))?;
@@ -169,8 +168,8 @@ async fn apply_payout_event(
         bank_confirmed_at: None,
         remarks: d["remarks"].as_str().map(String::from),
     };
+    crate::engine::check_payouts(std::slice::from_ref(&rec))?;
     let status_text = serde_json::to_value(status).unwrap();
-    let _ = webhook_id;
     upsert_payout(tx, tenant, &rec, status_text.as_str(), Some(ts)).await
 }
 
@@ -214,6 +213,7 @@ pub struct Imported {
 /// changed are recorded as conflicts and not applied. Settings, rates and
 /// account state in the file replace what is stored.
 pub async fn import(pool: &PgPool, tenant: i64, input: &Input) -> Result<Imported> {
+    crate::engine::check_input(input).map_err(|err| format!("not imported: {err}"))?;
     let mut out = Imported::default();
     let mut tx = pool.begin().await.map_err(e)?;
     for chunk in input.ledger.chunks(5_000) {
@@ -385,7 +385,8 @@ pub async fn finish_job(
     body: &Value,
 ) -> Result<bool> {
     let mut tx = pool.begin().await.map_err(e)?;
-    sqlx::query("insert into reports (tenant_id, input_sha256, as_of, body) values ($1, $2, $3, $4) on conflict do nothing")
+    sqlx::query("insert into reports (tenant_id, input_sha256, as_of, body) values ($1, $2, $3, $4)
+         on conflict (tenant_id, input_sha256) do update set as_of = excluded.as_of, body = excluded.body, created_at = now()")
         .bind(job.tenant)
         .bind(input_sha256)
         .bind(as_of)
@@ -396,6 +397,16 @@ pub async fn finish_job(
     if crate::server::crash_point("after_report") {
         std::process::exit(3);
     }
+    // Keep the latest reports per tenant; older ones only ever answer "what did it say then".
+    sqlx::query(
+        "delete from reports where tenant_id = $1 and input_sha256 not in (
+           select input_sha256 from reports where tenant_id = $1 order by as_of desc, created_at desc limit $2)",
+    )
+    .bind(job.tenant)
+    .bind(KEEP_REPORTS)
+    .execute(&mut *tx)
+    .await
+    .map_err(e)?;
     let cleared = sqlx::query("delete from jobs where tenant_id = $1 and version = $2")
         .bind(job.tenant)
         .bind(job.version)
@@ -426,7 +437,49 @@ pub async fn fail_job(pool: &PgPool, job: &Job, error: &str) -> Result<()> {
     Ok(())
 }
 
+/// Reports kept per tenant.
+pub const KEEP_REPORTS: i64 = 30;
+
+/// The newest report. If the last recompute failed, the error is attached so a
+/// caller can tell the report is older than the data.
 pub async fn latest_report(pool: &PgPool, tenant: i64) -> Result<Option<Value>> {
-    let row = sqlx::query("select body from reports where tenant_id = $1 order by as_of desc, created_at desc limit 1").bind(tenant).fetch_optional(pool).await.map_err(e)?;
-    Ok(row.map(|r| r.get(0)))
+    let row = sqlx::query(
+        "select r.body, j.last_error from reports r left join jobs j on j.tenant_id = r.tenant_id
+         where r.tenant_id = $1 order by r.as_of desc, r.created_at desc limit 1",
+    )
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .map_err(e)?;
+    Ok(row.map(|r| {
+        let mut body: Value = r.get(0);
+        if let Some(err) = r.get::<Option<String>, _>(1) {
+            body["recompute_error"] = err.into();
+        }
+        body
+    }))
+}
+
+/// Queue a recompute for every tenant whose newest report is from before today (UTC).
+/// Payout runs are created at 00:00 UTC, so a report from yesterday can have the wrong
+/// next payout and overdue count even when no new data arrived.
+pub async fn queue_stale(pool: &PgPool) -> Result<u64> {
+    let n = sqlx::query(
+        "insert into jobs (tenant_id)
+         select t.id from tenants t
+         where exists (select 1 from entries e where e.tenant_id = t.id)
+           and coalesce((select max(as_of) from reports r where r.tenant_id = t.id), '-infinity')
+               < date_trunc('day', now(), 'UTC')
+         on conflict (tenant_id) do nothing",
+    )
+    .execute(pool)
+    .await
+    .map_err(e)?
+    .rows_affected();
+    Ok(n)
+}
+
+pub async fn ping(pool: &PgPool) -> Result<()> {
+    sqlx::query("select 1").execute(pool).await.map_err(e)?;
+    Ok(())
 }

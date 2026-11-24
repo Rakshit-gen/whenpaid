@@ -65,7 +65,7 @@ pub fn verify(
     Err(Rejected::NoMatch)
 }
 
-/// Produce a header value. Used by tests, the benchmark and `whenpaid sign`.
+/// Produce a header value, for tests and for anyone sending test webhooks.
 pub fn sign(key: &[u8], id: &str, timestamp: &str, body: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("any key length works");
     mac.update(format!("{id}.{timestamp}.").as_bytes());

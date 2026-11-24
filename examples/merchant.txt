@@ -3,6 +3,10 @@ Business bus_sample
 Rules public-docs/2026-11-24, docs as of: payouts 2026-11-19, balances 2026-10-22, breakup 2026-04-01, breakup-details 2026-10-16, ledger-api 2026-03-25, verification 2026-11-02, webhooks 2026-11-20, payout-webhooks 2026-10-28, mor-intro 2026-10-07
 Rounding: half to even, to the smallest unit of each currency. `whenpaid rules` shows where each rule id comes from.
 
+In short
+  Next payout: 2026-12-04, for 2026-11-16 to 2026-11-30. 630.34 USD before fees so far, minus a 5.00 USD payout fee and a conversion fee that isn't published, so the exact amount isn't known yet. [PS-PAYOUT-FEE, PS-CONVERSION]
+  Last payout: 2026-11-18, pyt_7002 for 197.51 USD failed and was credited back to the wallet. It goes out with the next eligible run. [PS-FAILED]
+
 Live payments: yes
 Payouts enabled: yes
 
@@ -113,7 +117,7 @@ Past runs
     Actual: pyt_7001 sent 268.09 USD, fee 5.00 USD
       Conversion cost implied by what was sent: 1.89 USD (before fees minus fees minus sent)
     Rules: BAL-TYPES, DC-FEE-COMPARE, PB-UNATTRIBUTED, PS-CONVERSION, PS-CYCLE, PS-FX-INDICATIVE, PS-INITIATION, PS-PAYOUT-FEE, PS-RESERVE, PS-THRESHOLD
-    Next: None for this run.
+    Next: Nothing to do.
 
   2026-10-19 combined: not paid: below the minimum, carried forward (scheduled 2026-10-18, moved past a weekend or holiday)
     Covers 2026-10-03 to 2026-10-15, created 00:00 UTC, counts entries before 2026-10-16 00:00 UTC
@@ -140,7 +144,7 @@ Past runs
 
 Payouts
   pyt_7001 created 2026-11-04: 268.09 USD, received by your bank on 2026-11-06 (confirmed by you)
-    For: combined run 2026-11-04. Next: None.
+    For: combined run 2026-11-04. Next: Nothing to do.
   pyt_7002 created 2026-11-18: 197.51 USD, failed; amount and fee credited back to the wallet (PS-FAILED)
     For: combined run 2026-11-18. Next: Fix the bank details if the remarks point to them. The money is back in the wallet and goes out with the next eligible run.
 
@@ -148,5 +152,5 @@ Wallet reconciliation
   EUR: opened 0.00 EUR, moved 193.63 EUR, closed 193.63 EUR (matches the reported balance 193.63 EUR)
   INR: opened 0.00 INR, moved 801.66 INR, closed 801.66 INR (matches the reported balance 801.66 INR)
   USD: opened 0.00 USD, moved 421.41 USD, closed 421.41 USD (matches the reported balance 421.41 USD)
-  INR 801.66 INR across 3 entries is not part of any payout: the INR wallet is discontinued: not paid out and not counted toward the minimum [PS-INR]
+  INR 801.66 INR across 3 entries are left out: the INR wallet is discontinued, so it is not paid out or counted toward the minimum [PS-INR]
   Settled conversion cnv_7001: 116.48 EUR became 124.28 USD at 1.066964 (exact 239/224)

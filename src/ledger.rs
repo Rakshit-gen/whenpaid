@@ -289,6 +289,35 @@ pub struct Ledger {
     balances: HashMap<Account, Money>,
 }
 
+/// Largest total, per currency, of every absolute amount and balance in one input.
+/// Below it, no running sum, balance or conversion in whenpaid can overflow an i64
+/// (conversions multiply by at most a few). Ten times the world's money supply in
+/// cents is still under it, so only broken data hits this.
+pub const MAX_TOTAL: i128 = (i64::MAX / 8) as i128;
+
+fn check_magnitude<'a>(rows: impl Iterator<Item = &'a LedgerEntry>) -> Result<(), String> {
+    let mut totals: HashMap<Currency, i128> = HashMap::new();
+    for e in rows {
+        let t = totals.entry(e.currency).or_insert(0);
+        *t += e.amount as i128;
+        for b in [e.before_balance, e.after_balance].into_iter().flatten() {
+            if (b as i128).abs() > MAX_TOTAL {
+                return Err(format!(
+                    "entry {}: balance {b} is too large to be real",
+                    e.id
+                ));
+            }
+        }
+        if *t > MAX_TOTAL {
+            return Err(format!(
+                "{} amounts add up to more than {MAX_TOTAL} minor units; the export looks broken",
+                e.currency
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl Ledger {
     /// Validate and post `raw`. Errors only when the input is self-contradictory
     /// (the same id with two different contents); everything else is a finding.
@@ -314,6 +343,7 @@ impl Ledger {
                 }
             }
         }
+        check_magnitude(by_id.values().map(|(e, _)| *e))?;
         let mut l = Ledger::default();
         let mut uniq: Vec<&LedgerEntry> = by_id.values().map(|(e, _)| *e).collect();
         for (id, (_, n)) in &by_id {

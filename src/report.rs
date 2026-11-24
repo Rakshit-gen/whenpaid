@@ -49,6 +49,12 @@ pub fn render(r: &Report, o: &Options) -> String {
         "Rounding: {rounding}, to the smallest unit of each currency. `whenpaid rules` shows where each rule id comes from.\n"
     );
 
+    let _ = writeln!(w, "In short");
+    for line in &r.summary {
+        let _ = writeln!(w, "  {line}");
+    }
+    let _ = writeln!(w);
+
     let yn = |b: Option<bool>| {
         b.map_or("not known (no verification data given)", |b| {
             if b { "yes" } else { "no" }
@@ -154,8 +160,17 @@ pub fn render(r: &Report, o: &Options) -> String {
     for x in &r.excluded {
         let _ = writeln!(
             w,
-            "  {} {} across {} entries is not part of any payout: {} [{}]",
-            x.currency, x.balance, x.entries, x.why, x.rule
+            "  {} {} across {} {} left out: {} [{}]",
+            x.currency,
+            x.balance,
+            x.entries,
+            if x.entries == 1 {
+                "entry is"
+            } else {
+                "entries are"
+            },
+            x.why,
+            x.rule
         );
     }
     for c in &r.settled_conversions {

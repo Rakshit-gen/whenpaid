@@ -85,6 +85,27 @@ fn s2_hold_with_no_reason_stays_unknown_and_counts_days() {
     );
 }
 
+/// The top of the report answers S2 in plain words, without the reader digging through runs.
+#[test]
+fn s2_summary_says_on_hold_and_for_how_long() {
+    let mut b = Builder::new();
+    b.sale("pay_a", "2026-10-02T09:00:00Z", USD, 80_000, 0, 0);
+    let mut i = input(&b, "2026-11-24T00:00:00Z");
+    i.restrictions = vec![Restriction {
+        id: "hold_1".into(),
+        kind: RestrictionKind::Other,
+        from: t("2026-10-10T00:00:00Z"),
+        until: None,
+        reason: None,
+        pauses_payouts: None,
+    }];
+    let r = whenpaid::explain(&i).unwrap();
+    let s = r.summary.join("\n");
+    assert!(s.contains("Reason: not disclosed. Until: unknown."), "{s}");
+    assert!(s.contains("won't go out while the hold lasts"), "{s}");
+    assert!(s.contains("due since 2026-10-19, 36 days"), "{s}");
+}
+
 /// S3. A hold that lasts for a long dispute window, then ends: everything held goes out on the next run.
 #[test]
 fn s3_long_dispute_window_hold_then_release() {

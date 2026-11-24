@@ -50,6 +50,12 @@ Docs as of 2026-11-24. If a page changes, its last-modified date in `src/policy.
 
 **No outbox.** whenpaid never moves money, so there is nothing to make exactly-once on the way out. If it ever sends emails or support replies, that send will need an outbox.
 
+**Rows after as_of.** A report is for one moment. Ledger rows dated after `as_of` are left out of every run and the reconciliation, and listed with their count and total (DC-AS-OF). The service always uses the current time, so this only matters for the CLI or for clock skew.
+
+**Webhook secrets are stored as given.** Checking an HMAC needs the key itself, so the webhook secret sits in the tenants table in plain text. API tokens are stored only as SHA-256 hashes. Anyone who can read the database can forge webhooks for that tenant, so treat database access accordingly.
+
+**No rate limiting.** An unsigned request costs one indexed lookup to find the tenant's secret, and nothing is written until the signature checks out. There is no per-tenant or per-IP limit, though, so put the service behind a proxy that has one.
+
 **Memory.** The engine holds the whole export in memory. A million rows peaks around 1.3 GB. That's fine for one merchant's history but not for a whole platform in one process.
 
 ## Questions for the payouts team

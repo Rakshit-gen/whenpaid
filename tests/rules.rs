@@ -117,6 +117,21 @@ fn monthly_run_on_columbus_day_moves() {
 }
 
 /// The sample account in examples/ renders the same text every time.
+/// The first lines of the sample report answer when, how much and why, with rule ids.
+#[test]
+fn sample_summary_answers_the_three_questions() {
+    let text = std::fs::read_to_string("examples/merchant.json").unwrap();
+    let i: Input = serde_json::from_str(&text).unwrap();
+    let r = whenpaid::explain(&i).unwrap();
+    assert_eq!(
+        r.summary,
+        vec![
+            "Next payout: 2026-12-04, for 2026-11-16 to 2026-11-30. 630.34 USD before fees so far, minus a 5.00 USD payout fee and a conversion fee that isn't published, so the exact amount isn't known yet. [PS-PAYOUT-FEE, PS-CONVERSION]",
+            "Last payout: 2026-11-18, pyt_7002 for 197.51 USD failed and was credited back to the wallet. It goes out with the next eligible run. [PS-FAILED]",
+        ]
+    );
+}
+
 #[test]
 fn sample_report_is_stable() {
     let text = std::fs::read_to_string("examples/merchant.json").unwrap();
