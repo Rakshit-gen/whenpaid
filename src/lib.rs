@@ -7,6 +7,7 @@ pub mod engine;
 pub mod ledger;
 pub mod money;
 pub mod policy;
+pub mod report;
 
 pub use engine::{Input, Report};
 
